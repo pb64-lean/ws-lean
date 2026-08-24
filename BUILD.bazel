@@ -1,0 +1,172 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_lean//lean:defs.bzl", "lean_assurance_test", "lean_library", "lean_test")
+
+lean_library(
+    name = "ws_lean",
+    srcs = ["Ws.lean"] + glob(["Ws/**/*.lean"]),
+    deps = [
+        "//native:ws_deflate_ffi",
+        "@rules_lean_grpc//:grpc_lean",
+    ],
+)
+
+# Exact audit of the complete first-party module graph and its native boundary.
+lean_assurance_test(
+    name = "ws_assurance",
+    policy_mode = "exact",
+    principal_theorems = [],
+    principal_theorem_types = {},
+    allowed_axioms = [
+        "propext",
+        "Classical.choice",
+        "Quot.sound",
+    ],
+    module_prefixes = ["Ws"],
+    unaudited_module_prefixes = [
+        "Binary",
+        "Grpc",
+        "HaclStar",
+        "Protobuf",
+        "TLS13",
+        "Tls",
+        "Zlib",
+    ],
+    expected_unsafe_constants = [],
+    expected_partial_definitions = [
+        "Ws.Client.acquireAttempt",
+        "Ws.Client.awaitAsyncTaskWithin",
+        "Ws.Client.awaitCommittedOpening",
+        "Ws.Client.awaitOpening",
+        "Ws.Client.openingTransportOperation.wait",
+        "Ws.Connection.acquireAdmissionIO",
+        "Ws.Connection.awaitAbortWork",
+        "Ws.Connection.awaitCompletion",
+        "Ws.Connection.awaitCompletionIO",
+        "Ws.Connection.awaitTaskWithin",
+        "Ws.Connection.nextIncomingIO",
+        "Ws.Connection.readerLoop",
+        "Ws.Connection.receiveClosedIO",
+        "Ws.Connection.servicePendingControls",
+        "Ws.Connection.waitCloseDeadline",
+        "Ws.Connection.writerLoop",
+        "Ws.Server.awaitTimedTask",
+        "Ws.Transport.ByteStream.recv?",
+        "Ws.Transport.Http1.receiveHead",
+        "Ws.Transport.Http1.receiveSwitchingProtocols",
+        "Ws.Transport.Plain.writerLoop",
+        "Ws.Transport.Tls.recvPlaintext",
+    ],
+    expected_opaque_constants = [
+        "Ws.Client.attemptCoordinator",
+        "Ws.PerMessageDeflate.Raw.Context.close",
+        "Ws.PerMessageDeflate.Raw.ContextImpl",
+        "Ws.PerMessageDeflate.Raw.createRaw",
+        "Ws.PerMessageDeflate.Raw.processRaw",
+    ],
+    expected_implemented_by = {},
+    expected_extern_declarations = {
+        "Ws.PerMessageDeflate.Raw.Context.close": "all:standard:ws_deflate_close",
+        "Ws.PerMessageDeflate.Raw.createRaw": "all:standard:ws_deflate_create",
+        "Ws.PerMessageDeflate.Raw.processRaw": "all:standard:ws_deflate_process",
+    },
+    expected_native_targets = [
+        "//native:lean_runtime_headers",
+        "//native:ws_deflate_ffi",
+        "@rules_lean_grpc+//Zlib:lean_runtime_headers",
+        "@rules_lean_grpc+//Zlib:zlib_shim",
+        "@rules_lean_grpc+//native:lean_runtime_headers",
+        "@rules_lean_grpc+//native:posix_ffi",
+        "@tls13-lean++_repo_rules+hacl//:hacl",
+        "@tls13-lean+//HaclStar:hacl_shim",
+        "@tls13-lean+//HaclStar:lean_runtime_headers",
+        "@zlib+//:z",
+    ],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "base64_sha1_test",
+    srcs = ["Test/Base64Sha1Test.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "connection_test",
+    srcs = ["Test/ConnectionTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "client_test",
+    srcs = ["Test/ClientTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "endpoint_header_test",
+    srcs = ["Test/EndpointHeaderTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "frame_test",
+    srcs = ["Test/FrameTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "handshake_test",
+    srcs = ["Test/HandshakeTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "http2_handshake_test",
+    srcs = ["Test/Http2HandshakeTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "integration_test",
+    srcs = ["Test/IntegrationTest.lean"],
+    tags = ["no-sandbox", "exclusive"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "message_test",
+    srcs = ["Test/MessageTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "server_test",
+    srcs = ["Test/ServerTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "permessage_deflate_negotiation_test",
+    srcs = ["Test/PerMessageDeflateNegotiationTest.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "utf8_test",
+    srcs = ["Test/Utf8Test.lean"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "transport_test",
+    srcs = ["Test/TransportTest.lean"],
+    tags = ["no-sandbox", "exclusive"],
+    deps = [":ws_lean"],
+)
+
+lean_test(
+    name = "permessage_deflate_raw_test",
+    srcs = ["Test/PerMessageDeflateRawTest.lean"],
+    deps = [":ws_lean"],
+)

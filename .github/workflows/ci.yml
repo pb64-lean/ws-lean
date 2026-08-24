@@ -1,0 +1,22 @@
+name: ci
+
+# Hermetic Bazel tests and a complete locked build run on the self-hosted NixOS
+# runners. Pull requests use the hosted assurance workflow and never execute on
+# self-hosted hosts.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "29 4 * * 1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: pb64-lean/.github/.github/workflows/bazel-ci.yml@main
+    with:
+      siblings: rules_lean grpc-lean tls13-lean
+      post_bazel: "build --lockfile_mode=error //... //Conformance:echo_server //Conformance:load_client"

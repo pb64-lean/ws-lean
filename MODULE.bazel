@@ -1,0 +1,53 @@
+module(
+    name = "ws-lean",
+    version = "0.1.0",
+    compatibility_level = 1,
+)
+
+# Base Lean build rules. Development uses local dependency checkouts so related
+# changes can be validated atomically; release pins replace these overrides
+# with immutable public archives.
+bazel_dep(name = "rules_lean", version = "0.1.0")
+local_path_override(
+    module_name = "rules_lean",
+    path = "../rules_lean",
+)
+
+# HTTP/2, TLS sessions, DNS, and trust-store support.
+bazel_dep(name = "rules_lean_grpc", version = "0.1.0")
+local_path_override(
+    module_name = "rules_lean_grpc",
+    path = "../grpc-lean",
+)
+
+# The shared runtime's TLS dependency. Root overrides are not inherited from
+# dependencies, so the development root supplies the local override explicitly.
+bazel_dep(name = "tls13-lean", version = "0.1.0", repo_name = "tls13_lean")
+local_path_override(
+    module_name = "tls13-lean",
+    path = "../tls13-lean",
+)
+
+# Raw DEFLATE for RFC 7692.
+bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
+
+# Nix-pinned Lean toolchain files used by this repository's own builds only.
+bazel_dep(name = "grpc_lean_protobuf", version = "0.1.0", dev_dependency = True)
+local_path_override(
+    module_name = "grpc_lean_protobuf",
+    path = "../grpc-lean/third_party/Lean-zh/protobuf",
+)
+local_path_override(
+    module_name = "grpc_lean_protobuf_binary",
+    path = "../grpc-lean/third_party/Lean-zh/binary",
+)
+
+lean = use_extension("@rules_lean//lean:extensions.bzl", "lean", dev_dependency = True)
+lean.nix_toolchain(
+    name = "lean4",
+    attr = "lean4_upstream_std",
+    nix_file = "@grpc_lean_protobuf//:nixpkgs.nix",
+    nix_file_deps = ["@grpc_lean_protobuf//:nixpkgs.json"],
+)
+use_repo(lean, "lean4_toolchain")
+register_toolchains("@lean4_toolchain//:all", dev_dependency = True)

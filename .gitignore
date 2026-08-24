@@ -1,0 +1,3 @@
+.lake/
+.bazelrc.local
+bazel-*

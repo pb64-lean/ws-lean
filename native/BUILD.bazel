@@ -1,0 +1,46 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_lean//lean:defs.bzl", "lean_runtime_headers")
+load("@rules_lean_grpc//native:defs.bzl", "lean_generated_c_file")
+
+lean_runtime_headers(
+    name = "lean_runtime_headers",
+)
+
+cc_library(
+    name = "ws_deflate_ffi",
+    srcs = ["ws_deflate.c"],
+    hdrs = ["ws_deflate.h"],
+    copts = [
+        "-std=c17",
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-Wmissing-prototypes",
+    ],
+    deps = [
+        ":lean_runtime_headers",
+        "@zlib//:zlib",
+    ],
+)
+
+# Compile the generated extern declarations beside the handwritten header so
+# every calling-convention or representation mismatch is a C compiler error.
+lean_generated_c_file(
+    name = "deflate_generated_c",
+    dep = "//:ws_lean",
+    module_suffix = "/Ws/PerMessageDeflate/Raw.c",
+)
+
+cc_library(
+    name = "deflate_extern_abi_compile",
+    srcs = [":deflate_generated_c"],
+    additional_compiler_inputs = ["ws_deflate.h"],
+    copts = [
+        "-include",
+        "$(location ws_deflate.h)",
+        "-Werror",
+        "-Wno-unused-variable",
+    ],
+    deps = [":lean_runtime_headers"],
+)
