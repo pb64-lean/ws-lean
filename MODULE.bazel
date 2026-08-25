@@ -30,6 +30,7 @@ local_path_override(
 
 # Raw DEFLATE for RFC 7692.
 bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
+bazel_dep(name = "rules_cc", version = "0.2.17")
 
 # Nix-pinned Lean toolchain files used by this repository's own builds only.
 bazel_dep(name = "grpc_lean_protobuf", version = "0.1.0", dev_dependency = True)
