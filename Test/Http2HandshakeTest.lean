@@ -34,6 +34,33 @@ def main : IO Unit := do
   expect (request.protocol == "websocket" && request.scheme == "https" &&
     request.authority == "server.example" && request.path == "/chat?room=blue")
     "extended CONNECT pseudo-fields differ"
+
+  let rawValue := ByteArray.mk #[0x80, 0xff]
+  let rawExtra ← take "raw extra field" <|
+    Headers.empty.insertBytes "x-raw" rawValue
+  let rawOffer ← take "raw client offer" <|
+    Ws.Http2.Handshake.ClientOffer.create endpoint (extraHeaders := rawExtra)
+  let rawOutbound ← take "raw outbound request" <|
+    Ws.Http2.Handshake.buildClientRequest rawOffer
+  expect (rawOutbound.headers.getAllOctets "x-raw" == #[rawValue])
+    "extended CONNECT outbound extra field changed invalid UTF-8 octets"
+
+  let (rawString, rawOctets?) := Http2.Header.decodeWireString rawValue
+  let rawHeader : Http2.Header := {
+    name := "x-raw"
+    value := rawString
+    valueOctets? := rawOctets?
+  }
+  let rawInbound : Http2.ExtendedConnect.Request := {
+    request with
+    headers := (Http2.Headers.singleton "sec-websocket-version" "13").push rawHeader
+  }
+  let rawAccepted ← take "raw inbound request" <|
+    Ws.Http2.Handshake.validateServerRequest rawInbound
+      { ({} : Limits) with maxHeaderValueBytes := 2 }
+  expect (Headers.getAll rawAccepted.headers "x-raw" == #[rawValue])
+    "extended CONNECT inbound extra field changed invalid UTF-8 octets"
+
   let serverRequest ← take "validate request" (Ws.Http2.Handshake.validateServerRequest request)
   expect (serverRequest.origin? == some "https://example.test" &&
     serverRequest.subprotocols == #[chat] && serverRequest.extensions == #[compression])

@@ -22,18 +22,21 @@ private def addHandshakeBytes (limit total amount : Nat) : Except Error Nat := d
 private def fieldListEntrySize (name value : String) : Nat :=
   name.utf8ByteSize + value.utf8ByteSize + 32
 
+private def headerListEntrySize (header : Http2.Header) : Nat :=
+  (Http2.Header.nameOctets header).size +
+    (Http2.Header.valueOctets header).size + 32
+
 private def validateMetadataLimits (metadata : Http2.Headers) (limits : Limits)
     (initialBytes : Nat) : Except Error Unit := do
   if metadata.size > limits.maxHeaderCount then
     throw (Error.handshake "HTTP/2 WebSocket handshake exceeds the configured field-count limit")
   let mut total ← addHandshakeBytes limits.maxHandshakeBytes 0 initialBytes
   for header in metadata do
-    if header.name.utf8ByteSize > limits.maxHeaderNameBytes then
+    if (Http2.Header.nameOctets header).size > limits.maxHeaderNameBytes then
       throw (Error.handshake "HTTP/2 field name exceeds the configured limit")
-    if header.value.utf8ByteSize > limits.maxHeaderValueBytes then
+    if (Http2.Header.valueOctets header).size > limits.maxHeaderValueBytes then
       throw (Error.handshake "HTTP/2 field value exceeds the configured limit")
-    total ← addHandshakeBytes limits.maxHandshakeBytes total
-      (fieldListEntrySize header.name header.value)
+    total ← addHandshakeBytes limits.maxHandshakeBytes total (headerListEntrySize header)
 
 private def validateRequestLimits (request : Http2.ExtendedConnect.Request)
     (limits : Limits) : Except Error Unit := do
@@ -56,7 +59,9 @@ private def validateResponseLimits (response : Http2.ExtendedConnect.Response)
 private def toWsHeaders (metadata : Http2.Headers) : Except Error Headers := do
   let mut headers : Headers := #[]
   for header in metadata do
-    match Header.ofString header.name header.value with
+    let some name := String.fromUTF8? (Http2.Header.nameOctets header)
+      | throw (Error.handshake "HTTP/2 field name must contain ASCII")
+    match Header.ofBytes name (Http2.Header.valueOctets header) with
     | .ok value => headers := headers.push value
     | .error error => throw error
   pure headers
@@ -65,9 +70,8 @@ private def toMetadata (headers : Headers) : Except Error Http2.Headers := do
   let mut metadata := Http2.Headers.empty
   for header in headers do
     let checked ← Header.ofBytes header.name header.value
-    let some value := Header.asciiString? checked.value
-      | throw (Error.invalidArgument "HTTP/2 WebSocket fields must contain ASCII")
-    metadata := metadata.insert checked.name value
+    let (value, valueOctets?) := Http2.Header.decodeWireString checked.value
+    metadata := metadata.push { name := checked.name, value, valueOctets? }
   pure metadata
 
 private def protectedRequestName (name : String) : Bool :=
