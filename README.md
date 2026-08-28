@@ -118,7 +118,7 @@ def serveHttp1 (stream : Transport.ByteStream) :
   Server.handleHttp1 stream policy echo
 
 def websocketOverHttp2 :
-    Except Server.Error Grpc.Http2.ExtendedConnect.Handler :=
+    Except Server.Error Http2.ExtendedConnect.Handler :=
   Server.extendedConnectHandler policy echo
 ```
 

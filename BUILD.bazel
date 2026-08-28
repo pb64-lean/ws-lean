@@ -7,7 +7,8 @@ lean_library(
     srcs = ["Ws.lean"] + glob(["Ws/**/*.lean"]),
     deps = [
         "//native:ws_deflate_ffi",
-        "@rules_lean_grpc//:grpc_lean",
+        "@http2_lean//:http2",
+        "@http2_lean//:runtime",
     ],
 )
 
@@ -24,10 +25,8 @@ lean_assurance_test(
     ],
     module_prefixes = ["Ws"],
     unaudited_module_prefixes = [
-        "Binary",
-        "Grpc",
         "HaclStar",
-        "Protobuf",
+        "Http2",
         "TLS13",
         "Tls",
         "Zlib",
@@ -73,10 +72,8 @@ lean_assurance_test(
     expected_native_targets = [
         "//native:lean_runtime_headers",
         "//native:ws_deflate_ffi",
-        "@rules_lean_grpc+//Zlib:lean_runtime_headers",
-        "@rules_lean_grpc+//Zlib:zlib_shim",
-        "@rules_lean_grpc+//native:lean_runtime_headers",
-        "@rules_lean_grpc+//native:posix_ffi",
+        "@http2-lean+//native:lean_runtime_headers",
+        "@http2-lean+//native:posix_ffi",
         "@tls13-lean++_repo_rules+hacl//:hacl",
         "@tls13-lean+//HaclStar:hacl_shim",
         "@tls13-lean+//HaclStar:lean_runtime_headers",

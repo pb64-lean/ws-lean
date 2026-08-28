@@ -1,8 +1,8 @@
 module
 
-public import Grpc.Client
-public import Grpc.NameResolver
-public import Grpc.TrustAnchors
+public import Http2.Client
+public import Http2.NameResolver
+public import Http2.TrustAnchors
 public import Ws.Connection
 public import Ws.Http2.Handshake
 public import Ws.Transport.Http1
@@ -140,9 +140,9 @@ private def compressionParameters (offer? : Option PerMessageDeflate.ClientOffer
       | .error error => .error (ofProtocol error)
 
 private def resolveAddresses (endpoint : Endpoint) (cancellation : Std.CancellationToken) :
-    Async (Except Error (Array Grpc.NameResolver.Address)) := do
+    Async (Except Error (Array Http2.NameResolver.Address)) := do
   let port := UInt16.ofNat endpoint.port
-  match ← Grpc.NameResolver.resolveHostAsync endpoint.serverName port (some cancellation) with
+  match ← Http2.NameResolver.resolveHostAsync endpoint.serverName port (some cancellation) with
   | .error error => pure (.error (failure .resolution (toString error)))
   | .ok addresses =>
       if addresses.isEmpty then
@@ -150,12 +150,14 @@ private def resolveAddresses (endpoint : Endpoint) (cancellation : Std.Cancellat
       else
         pure (.ok addresses)
 
-private def grpcConfig (config : Config) (address : Grpc.NameResolver.Address) :
-    Grpc.Client.Config := {
+private def http2Config (config : Config) (address : Http2.NameResolver.Address) :
+    Http2.Client.Config := {
   address := address.socketAddress
   authority := config.endpoint.authority
   scheme := config.endpoint.scheme.httpName
   readSize := config.readSize
+  maxHeaderListSize := some config.connection.limits.maxHandshakeBytes
+  maxCompressedHeaderBlockSize := config.connection.limits.maxHandshakeBytes
 }
 
 private partial def awaitAsyncTaskWithin (task : AsyncTask α) (remainingMs : Nat) :
@@ -250,7 +252,7 @@ private partial def awaitOpening (task : AsyncTask (Option (Except Error Connect
     if !won then
       pure (.completed (← awaitCommittedOpening task))
     else
-      discard <| Grpc.CancellationToken.cancel combined
+      discard <| Http2.CancellationToken.cancel combined
       -- Native DNS/connect promises may still be in flight. Their retained
       -- action owns eventual socket and lease cleanup; caller latency remains
       -- bounded without force-cancelling that cleanup continuation.
@@ -341,10 +343,10 @@ private def openHttp1 (stream : Transport.ByteStream) (config : Config)
       startRuntime stream config accepted.subprotocol? parameters cancellation
 
 private def ownHttp2Connection (stream : Transport.ByteStream)
-    (parent : Grpc.Client.Connection) : Transport.ByteStream := {
+    (parent : Http2.Client.Connection) : Transport.ByteStream := {
   stream with
   retireImpl := fun _ => do
-    try Grpc.Client.close parent catch _ => pure ()
+    try Http2.Client.close parent catch _ => pure ()
     try stream.retire catch _ => pure ()
 }
 
@@ -352,31 +354,31 @@ private structure Http2OpenError where
   error : Error
   extendedConnectUnsupported : Bool := false
 
-private def openHttp2 (parent : Grpc.Client.Connection) (config : Config)
+private def openHttp2 (parent : Http2.Client.Connection) (config : Config)
     (cancellation : Std.CancellationToken) :
     Async (Except Http2OpenError Connected) := do
   let offeredExtensions ← match extensions config.compression? with
     | .ok values => pure values
     | .error error =>
-        Grpc.Client.close parent
+        Http2.Client.close parent
         return .error { error }
   let offer ← match Http2.Handshake.ClientOffer.create config.endpoint
       config.subprotocols offeredExtensions config.origin? config.extraHeaders with
     | .ok offer => pure offer
     | .error error =>
-        Grpc.Client.close parent
+        Http2.Client.close parent
         return .error { error := ofProtocol error }
   let request ← match Http2.Handshake.buildClientRequest offer with
     | .ok request => pure request
     | .error error =>
-        Grpc.Client.close parent
+        Http2.Client.close parent
         return .error { error := ofProtocol error }
   match ← parent.peerExtendedConnectEnabled (some cancellation) with
   | .error status =>
-      Grpc.Client.close parent
-      return .error { error := failure .transport status.messageD }
+      Http2.Client.close parent
+      return .error { error := failure .transport status.message }
   | .ok false =>
-      Grpc.Client.close parent
+      Http2.Client.close parent
       return .error {
         error := failure .handshake "peer did not enable RFC 8441 Extended CONNECT",
         extendedConnectUnsupported := true
@@ -384,37 +386,38 @@ private def openHttp2 (parent : Grpc.Client.Connection) (config : Config)
   | .ok true => pure ()
   match ← parent.openExtendedConnect request (some cancellation) with
   | .error status =>
-      Grpc.Client.close parent
-      pure (.error { error := failure .transport status.messageD })
+      Http2.Client.close parent
+      pure (.error { error := failure .transport status.message })
   | .ok (.rejected response) =>
-      Grpc.Client.close parent
+      Http2.Client.close parent
       let error := failure .handshake
         s!"WebSocket extended CONNECT was rejected with status {response.status}"
       pure (.error { error })
   | .ok (.accepted response tunnel) =>
-      let accepted ← match Http2.Handshake.validateServerResponse offer response with
+      let accepted ← match Http2.Handshake.validateServerResponse offer response
+          config.connection.limits with
         | .ok accepted => pure accepted
         | .error error =>
             try tunnel.cancel catch _ => pure ()
-            Grpc.Client.close parent
+            Http2.Client.close parent
             return .error { error := ofProtocol error }
       let parameters ← match compressionParameters config.compression? accepted.extensions with
         | .ok parameters => pure parameters
         | .error error =>
             try tunnel.cancel catch _ => pure ()
-            Grpc.Client.close parent
+            Http2.Client.close parent
             return .error { error }
       let stream := ownHttp2Connection (← Transport.Http2.ofTunnel tunnel) parent
       match ← startRuntime stream config accepted.subprotocol? parameters cancellation with
       | .ok connected => pure (.ok connected)
       | .error error => pure (.error { error })
 
-private def plaintext (address : Grpc.NameResolver.Address) (config : Config)
+private def plaintext (address : Http2.NameResolver.Address) (config : Config)
     (cancellation : Std.CancellationToken) :
     Async (Except Error Connected) := do
   if config.versionPolicy == .http2Only then
     try
-      let parent ← Grpc.Client.connectAsync (grpcConfig config address) (some cancellation)
+      let parent ← Http2.Client.connectAsync (http2Config config address) (some cancellation)
       match ← openHttp2 parent config cancellation with
       | .ok connected => pure (.ok connected)
       | .error error => pure (.error error.error)
@@ -443,12 +446,12 @@ private def trustAnchors (security : Security) : IO (Except Error (Option String
         pure (.error (failure .invalidArgument "TLS trust-anchor PEM must not be empty"))
       else pure (.ok (some anchors))
   | .system =>
-      match ← Grpc.TrustAnchors.load with
+      match ← Http2.TrustAnchors.load with
       | .ok bundle => pure (.ok (some bundle.pem))
       | .error error => pure (.error (failure .tls (toString error)))
 
 private def tlsConfig (config : Config) (anchors? : Option String)
-    (protocols : Array String) : Grpc.Client.TlsConfig :=
+    (protocols : Array String) : Http2.Client.TlsConfig :=
   let numericIdentity := (Std.Net.IPv4Addr.ofString config.endpoint.serverName).isSome ||
     (Std.Net.IPv6Addr.ofString config.endpoint.serverName).isSome
   {
@@ -457,20 +460,21 @@ private def tlsConfig (config : Config) (anchors? : Option String)
     alpnProtocols := protocols
     trustAnchorsPEM := anchors?
     verifyHostname := config.security.trust != .insecureSkipVerification
+    insecureSkipVerification := config.security.trust == .insecureSkipVerification
   }
 
-private def openTlsHttp1 (bootstrap : Grpc.Client.TlsBootstrap) (config : Config)
+private def openTlsHttp1 (bootstrap : Http2.Client.TlsBootstrap) (config : Config)
     (cancellation : Std.CancellationToken) : Async (Except Error Connected) := do
   let stream := withOpeningCancellation
     (← Transport.Tls.ofClientSession bootstrap.session
       bootstrap.initialInbound { readSize := config.readSize }) cancellation
   openHttp1 stream config cancellation
 
-private def retrySecureHttp1 (address : Grpc.NameResolver.Address) (config : Config)
+private def retrySecureHttp1 (address : Http2.NameResolver.Address) (config : Config)
     (anchors? : Option String) (cancellation : Std.CancellationToken) :
     Async (Except Error Connected) := do
   let bootstrap ← try
-      Grpc.Client.bootstrapTlsAsync (grpcConfig config address)
+      Http2.Client.bootstrapTlsAsync (http2Config config address)
         (tlsConfig config anchors? #["http/1.1"]) (some cancellation)
     catch error => return .error (failure .tls (toString error))
   match ← bootstrap.session.alpnSelected with
@@ -480,7 +484,7 @@ private def retrySecureHttp1 (address : Grpc.NameResolver.Address) (config : Con
       pure (.error (failure .alpn
         s!"HTTP/1 fallback selected unsupported ALPN protocol {protocol}"))
 
-private def secure (address : Grpc.NameResolver.Address) (config : Config)
+private def secure (address : Http2.NameResolver.Address) (config : Config)
     (cancellation : Std.CancellationToken) :
     Async (Except Error Connected) := do
   let anchors? ← match ← trustAnchors config.security with
@@ -491,7 +495,7 @@ private def secure (address : Grpc.NameResolver.Address) (config : Config)
     | .http1Only => #["http/1.1"]
     | .http2Only => #["h2"]
   let bootstrap ← try
-      Grpc.Client.bootstrapTlsAsync (grpcConfig config address)
+      Http2.Client.bootstrapTlsAsync (http2Config config address)
         (tlsConfig config anchors? protocols) (some cancellation)
     catch error => return .error (failure .tls (toString error))
   let selected ← bootstrap.session.alpnSelected
@@ -501,15 +505,15 @@ private def secure (address : Grpc.NameResolver.Address) (config : Config)
         bootstrap.close
         pure (.error (failure .alpn "server selected h2 for an HTTP/1-only connection"))
       else
-        let adopted ← IO.mkRef (none : Option Grpc.Client.Connection)
+        let adopted ← IO.mkRef (none : Option Http2.Client.Connection)
         let result : Except Http2OpenError Connected ← try
-            let parent ← Grpc.Client.Connection.adoptTlsH2Async
-              (grpcConfig config address) bootstrap (some cancellation)
+            let parent ← Http2.Client.Connection.adoptTlsH2Async
+              (http2Config config address) bootstrap (some cancellation)
             adopted.set (some parent)
             openHttp2 parent config cancellation
           catch error =>
             match ← adopted.get with
-            | some parent => Grpc.Client.close parent
+            | some parent => Http2.Client.close parent
             | none => bootstrap.close
             pure (.error { error := failure .transport (toString error) })
         match result with

@@ -1,7 +1,7 @@
 module
 
-public import Grpc.CancellationToken
-public import Grpc.Http2.ExtendedConnect
+public import Http2.CancellationToken
+public import Http2.ExtendedConnect
 public import Ws.Transport.ByteStream
 
 public section
@@ -36,7 +36,7 @@ private inductive LifecycleEvent where
   | tunnelEnded
   | abortRequested
 
-private def lifecycleOwner (tunnel : Grpc.Http2.ExtendedConnect.Tunnel)
+private def lifecycleOwner (tunnel : Http2.ExtendedConnect.Tunnel)
     (abortToken : Std.CancellationToken) : Async Unit := do
   -- One retained waiter owns observation and removal of the HTTP/2 stream for
   -- the adapter's entire lifetime.  Abort work is also retained here, so the
@@ -62,25 +62,29 @@ private def lifecycleOwner (tunnel : Grpc.Http2.ExtendedConnect.Tunnel)
       else
         cancelAndRetireTask waitTask 50
 
-private def failure (status : Grpc.Status) : Failure :=
-  match status.code with
-  | .cancelled => Failure.cancelled status.messageD
-  | .invalidArgument | .failedPrecondition => Failure.protocol status.messageD
-  | code => Failure.reset code.toNat status.messageD
+private def failure (error : Http2.Error) : Failure :=
+  match error.scope with
+  | .localInput =>
+      if error.code == .cancel then Failure.cancelled error.message
+      else Failure.protocol error.message
+  | .stream _ => Failure.reset error.code.toNat error.message
+  | .connection =>
+      if error.code == .protocolError then Failure.protocol error.message
+      else Failure.reset error.code.toNat error.message
 
-private def recv (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) :
+private def recv (tunnel : Http2.ExtendedConnect.Tunnel) :
     Async (Except Failure (Option ByteArray)) := do
   match ← tunnel.recv? with
   | .ok bytes => pure (.ok bytes)
   | .error status => pure (.error (failure status))
 
-private def send (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) (bytes : ByteArray) :
+private def send (tunnel : Http2.ExtendedConnect.Tunnel) (bytes : ByteArray) :
     Async (Except Failure Unit) := do
   match ← tunnel.send bytes with
   | .ok _ => pure (.ok ())
   | .error status => pure (.error (failure status))
 
-private def finishSend (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) :
+private def finishSend (tunnel : Http2.ExtendedConnect.Tunnel) :
     Async (Except Failure Unit) := do
   match ← tunnel.closeSend with
   | .ok _ => pure (.ok ())
@@ -90,7 +94,7 @@ private def finishSend (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) :
 sticky and synchronous. A retained lifecycle owner observes `Tunnel.wait`,
 performs the actual RST_STREAM request, and bounds cancellation of a faulty
 tunnel implementation before `ByteStream.retire` joins that exact owner. -/
-def ofTunnel (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) : IO ByteStream := do
+def ofTunnel (tunnel : Http2.ExtendedConnect.Tunnel) : IO ByteStream := do
   let abortToken ← Std.CancellationToken.new
   let owner ← Async.toIO (lifecycleOwner tunnel abortToken)
   pure {
@@ -99,7 +103,7 @@ def ofTunnel (tunnel : Grpc.Http2.ExtendedConnect.Tunnel) : IO ByteStream := do
     sendImpl := send tunnel
     finishSendImpl := fun _ => finishSend tunnel
     abortImpl := do
-      discard <| Grpc.CancellationToken.cancel abortToken
+      discard <| Http2.CancellationToken.cancel abortToken
         (reason := Std.CancellationReason.cancel)
     retireImpl := fun _ => do
       try Async.ofAsyncTask owner catch _ => pure ()

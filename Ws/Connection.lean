@@ -94,6 +94,7 @@ private inductive WriteOperation where
   | message (message : Message.Message) (compress : Bool)
   | ping (payload : ByteArray)
   | pong (payload : ByteArray)
+  | automaticPong (payload : ByteArray)
   | close (value : Message.Close)
 
 private structure WriteRequest where
@@ -440,6 +441,7 @@ private def executeControlWrite (runtime : Runtime) (operation : WriteOperation)
   match operation with
   | .ping payload => sendFrame runtime { opcode := .ping, payload }
   | .pong payload => sendFrame runtime { opcode := .pong, payload }
+  | .automaticPong payload => sendFrame runtime { opcode := .pong, payload }
   | .close value =>
       match Message.Close.payload runtime.role value with
       | .error error => pure (.error (sendErrorOfProtocol error))
@@ -472,7 +474,12 @@ private partial def servicePendingControls (runtime : Runtime) :
   let some request ← runtime.control.tryRecv | pure (.ok false)
   unless request.operation matches .close _ do
     releaseControlAdmission runtime
-    let allowed ← runtime.state.atomically do pure ((← get).phase == .open)
+    let allowed ← runtime.state.atomically do
+      let state ← get
+      match request.operation with
+      | .automaticPong _ =>
+          pure (state.phase != .terminal && state.peerClose?.isNone)
+      | _ => pure (state.phase == .open)
     if !allowed then
       resolveWrite request (.error {
         kind := .closed, message := "WebSocket close handshake has started" })
@@ -510,7 +517,7 @@ private def sendAutomaticPong (runtime : Runtime) (payload : ByteArray) :
       releaseControlAdmission runtime
       pure (.ok ())
     else
-      submitControlClaimed runtime (.pong payload)
+      submitControlClaimed runtime (.automaticPong payload)
 
 private inductive DataWriteResult where
   | sent
@@ -589,7 +596,12 @@ private partial def writerLoop (runtime : Runtime) : Async WriterResult := do
   | .control (some request) =>
       unless request.operation matches .close _ do
         releaseControlAdmission runtime
-        let allowed ← runtime.state.atomically do pure ((← get).phase == .open)
+        let allowed ← runtime.state.atomically do
+          let state ← get
+          match request.operation with
+          | .automaticPong _ =>
+              pure (state.phase != .terminal && state.peerClose?.isNone)
+          | _ => pure (state.phase == .open)
         if !allowed then
           resolveWrite request (.error {
             kind := .closed, message := "WebSocket close handshake has started" })

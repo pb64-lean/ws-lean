@@ -1,6 +1,6 @@
 module
 
-public import Grpc.Http2.Server
+public import Http2.Server
 public import Ws.Connection
 public import Ws.Http2.Handshake
 public import Ws.Transport.Http1
@@ -480,9 +480,9 @@ def handleHttp1 (stream : Transport.ByteStream) (policy : Policy)
   if let .error error := result then reportError config error
   pure result
 
-private def rejectionMetadata (rejection : Rejection) : Except Error Grpc.Metadata := do
+private def rejectionMetadata (rejection : Rejection) : Except Error Http2.Headers := do
   validateRejection rejection
-  let mut metadata := Grpc.Metadata.empty
+  let mut metadata := Http2.Headers.empty
   if rejection.status == 426 then
     throw (failure .invalidArgument "HTTP/2 WebSocket rejection must not use status 426")
   if rejection.advertiseVersion then metadata := metadata.insert "sec-websocket-version" "13"
@@ -495,27 +495,28 @@ private def rejectionMetadata (rejection : Rejection) : Except Error Grpc.Metada
     metadata := metadata.insert checked.name value
   pure metadata
 
-private def h2Rejection (rejection : Rejection) : Grpc.Http2.ExtendedConnect.Decision :=
+private def h2Rejection (rejection : Rejection) : Http2.ExtendedConnect.Decision :=
   match rejectionMetadata rejection with
   | .ok headers => .reject { status := rejection.status, headers }
   | .error _ => .reject { status := 500 }
 
-private def h2InvalidVersion (request : Grpc.Http2.ExtendedConnect.Request) : Bool :=
+private def h2InvalidVersion (request : Http2.ExtendedConnect.Request) : Bool :=
   let values := request.headers.getAll "sec-websocket-version"
   values.size == 1 && unsupportedVersionToken values[0]!
 
 private structure Http2Plan where
-  decision : Grpc.Http2.ExtendedConnect.Decision
+  decision : Http2.ExtendedConnect.Decision
   report? : Option Error := none
 
 /-- Construct an RFC 8441 handler for composition into an HTTP/2 server's
 application table. Each accepted tunnel is lifetime-scoped to `application`;
 no connection task is detached. -/
 def extendedConnectHandler (policy : Policy) (application : Application)
-    (config : Config := {}) : Except Error Grpc.Http2.ExtendedConnect.Handler := do
+    (config : Config := {}) : Except Error Http2.ExtendedConnect.Handler := do
   validateConfig config
   pure fun raw => do
-    let accepted ← match Http2.Handshake.validateServerRequest raw with
+    let accepted ← match Http2.Handshake.validateServerRequest raw
+        config.connection.limits with
       | .ok request => pure request
       | .error _ =>
           return h2Rejection { status := 400, advertiseVersion := h2InvalidVersion raw }

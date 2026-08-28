@@ -2,8 +2,8 @@ module
 
 public import Std.Async.TCP
 public import Std.Sync.Mutex
-public import Grpc.CancellationToken
-public import Grpc.Tls.Session
+public import Http2.CancellationToken
+public import Http2.Tls.Session
 public import Ws.Transport.ByteStream
 
 public section
@@ -152,7 +152,7 @@ private def make (socket : TCP.Socket.Client) (initialInbound : ByteArray)
         pure (.error (Failure.io "TLS send" error))
     finishSendImpl := fun _ => finishSend finishState finishRequested
     abortImpl := do
-      discard <| Grpc.CancellationToken.cancel abortToken
+      discard <| Http2.CancellationToken.cancel abortToken
         (reason := Std.CancellationReason.cancel)
       abortFinish finishState
       discard <| finishRequested.resolve false
@@ -169,14 +169,14 @@ private def make (socket : TCP.Socket.Client) (initialInbound : ByteArray)
 
 /-- Adapt a verified client TLS session for HTTP/1 WebSocket traffic.  The
 selected ALPN must be checked by the caller before construction. -/
-def ofClientSession (session : Grpc.Tls.ClientSession)
+def ofClientSession (session : Http2.Tls.ClientSession)
     (initialInbound : ByteArray := ByteArray.empty) (config : Config := {}) :
     IO ByteStream :=
   make session.socket initialInbound session.feedInbound session.sendAcknowledged
     session.closeNotify session.abort session.retireOwned session.writerFailureSelector config
 
 /-- Adapt an established server TLS session for HTTP/1 WebSocket traffic. -/
-def ofServerSession (session : Grpc.Tls.ServerSession)
+def ofServerSession (session : Http2.Tls.ServerSession)
     (initialInbound : ByteArray := ByteArray.empty) (config : Config := {}) :
     IO ByteStream :=
   make session.socket initialInbound session.feedInbound session.sendAcknowledged

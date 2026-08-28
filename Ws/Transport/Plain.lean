@@ -3,7 +3,7 @@ module
 public import Std.Async.TCP
 public import Std.Sync.Channel
 public import Std.Sync.Mutex
-public import Grpc.CancellationToken
+public import Http2.CancellationToken
 public import Ws.Transport.ByteStream
 
 public section
@@ -236,7 +236,7 @@ def ofSocket (socket : TCP.Socket.Client) (config : Config := {}) : IO ByteStrea
     sendImpl := fun bytes => submit sendState requests (.send bytes)
     finishSendImpl := fun _ => submit sendState requests .finish
     abortImpl := do
-      discard <| Grpc.CancellationToken.cancel abortToken
+      discard <| Http2.CancellationToken.cancel abortToken
         (reason := Std.CancellationReason.cancel)
       abortWriter sendState requests writer
     retireImpl := fun _ => retire socket sendState requests writer config

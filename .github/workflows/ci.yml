@@ -18,5 +18,4 @@ jobs:
   test:
     uses: pb64-lean/.github/.github/workflows/bazel-ci.yml@main
     with:
-      siblings: rules_lean grpc-lean tls13-lean
       post_bazel: "build --lockfile_mode=error //... //Conformance:echo_server //Conformance:load_client"

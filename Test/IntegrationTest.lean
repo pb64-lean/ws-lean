@@ -161,15 +161,14 @@ def http2Integration : IO Unit := do
   let handler ← match Server.extendedConnectHandler (policy protocol) echoApplication with
   | .ok handler => pure handler
   | .error error => throw (IO.userError s!"HTTP/2 handler setup failed: {error.message}")
-  let server ← Grpc.Http2.Server.serveApplications {
-    grpc := Grpc.Registry.empty
+  let server ← Http2.Server.serveApplications {
     extendedConnect := some handler
-  } { address := Grpc.Http2.Server.loopback 0 }
+  } { address := Http2.Server.loopback 0 }
   try
     exerciseClient (← endpointAt (portOf server.localAddress)) .http2Only .http2 protocol
   finally
-    Grpc.Http2.Server.shutdown server
-    Grpc.Http2.Server.wait server (some 3000)
+    Http2.Server.shutdown server
+    Http2.Server.wait server (some 3000)
 
 def secureHttp1Integration : IO Unit := do
   let protocol ← selectedProtocol
@@ -180,7 +179,7 @@ def secureHttp1Integration : IO Unit := do
   let address ← listener.getSockName
   let serverTask ← Async.toIO do
     let socket ← listener.accept
-    let (session, initialInbound) ← Grpc.Tls.ServerSession.establishWithLeftover socket
+    let (session, initialInbound) ← Http2.Tls.ServerSession.establishWithLeftover socket
       (← tlsServerConfig ["http/1.1"])
     expect ((← session.alpnSelected) == some "http/1.1")
       "secure HTTP/1 server negotiated the wrong ALPN protocol"
@@ -200,19 +199,18 @@ def secureHttp2Integration : IO Unit := do
   let handler ← match Server.extendedConnectHandler (policy protocol) echoApplication with
   | .ok handler => pure handler
   | .error error => throw (IO.userError s!"secure HTTP/2 handler setup failed: {error.message}")
-  let server ← Grpc.Http2.Server.serveTlsApplications {
-    grpc := Grpc.Registry.empty
+  let server ← Http2.Server.serveTlsApplications {
     extendedConnect := some handler
   } {
     certificateChain := #[← decodeFixture "test certificate" testCertificateDerBase64]
     signingKey := ← decodeFixture "test signing key" testSigningKeyBase64
-  } { address := Grpc.Http2.Server.loopback 0 }
+  } { address := Http2.Server.loopback 0 }
   try
     exerciseClient (← secureEndpointAt (portOf server.localAddress))
       .http2Only .http2 protocol { trust := .pem testCertificatePem }
   finally
-    Grpc.Http2.Server.shutdown server
-    Grpc.Http2.Server.wait server (some 3000)
+    Http2.Server.shutdown server
+    Http2.Server.wait server (some 3000)
 
 def main : IO Unit := do
   http1Integration

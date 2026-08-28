@@ -1,6 +1,6 @@
 module
 
-public import Grpc.Http2.ExtendedConnect
+public import Http2.ExtendedConnect
 public import Ws.Endpoint
 public import Ws.Handshake.Common
 
@@ -8,13 +8,52 @@ public section
 
 namespace Ws.Http2.Handshake
 
-abbrev Request := Grpc.Http2.ExtendedConnect.Request
-abbrev Response := Grpc.Http2.ExtendedConnect.Response
+abbrev Request := Http2.ExtendedConnect.Request
+abbrev Response := Http2.ExtendedConnect.Response
 
-private def statusError (status : Grpc.Status) : Error :=
-  Error.handshake status.messageD
+private def statusError (status : Http2.Error) : Error :=
+  Error.handshake status.message
 
-private def toWsHeaders (metadata : Grpc.Metadata) : Except Error Headers := do
+private def addHandshakeBytes (limit total amount : Nat) : Except Error Nat := do
+  if amount > limit || total > limit - amount then
+    throw (Error.handshake "HTTP/2 WebSocket handshake exceeds the configured byte limit")
+  pure (total + amount)
+
+private def fieldListEntrySize (name value : String) : Nat :=
+  name.utf8ByteSize + value.utf8ByteSize + 32
+
+private def validateMetadataLimits (metadata : Http2.Headers) (limits : Limits)
+    (initialBytes : Nat) : Except Error Unit := do
+  if metadata.size > limits.maxHeaderCount then
+    throw (Error.handshake "HTTP/2 WebSocket handshake exceeds the configured field-count limit")
+  let mut total ← addHandshakeBytes limits.maxHandshakeBytes 0 initialBytes
+  for header in metadata do
+    if header.name.utf8ByteSize > limits.maxHeaderNameBytes then
+      throw (Error.handshake "HTTP/2 field name exceeds the configured limit")
+    if header.value.utf8ByteSize > limits.maxHeaderValueBytes then
+      throw (Error.handshake "HTTP/2 field value exceeds the configured limit")
+    total ← addHandshakeBytes limits.maxHandshakeBytes total
+      (fieldListEntrySize header.name header.value)
+
+private def validateRequestLimits (request : Http2.ExtendedConnect.Request)
+    (limits : Limits) : Except Error Unit := do
+  let startLineBytes := "CONNECT".utf8ByteSize + request.protocol.utf8ByteSize +
+    request.scheme.utf8ByteSize + request.authority.utf8ByteSize + request.path.utf8ByteSize
+  if startLineBytes > limits.maxStartLineBytes then
+    throw (Error.handshake "HTTP/2 WebSocket request pseudo-fields exceed the configured limit")
+  let pseudoBytes := fieldListEntrySize ":method" "CONNECT" +
+    fieldListEntrySize ":protocol" request.protocol +
+    fieldListEntrySize ":scheme" request.scheme +
+    fieldListEntrySize ":authority" request.authority +
+    fieldListEntrySize ":path" request.path
+  validateMetadataLimits request.headers limits pseudoBytes
+
+private def validateResponseLimits (response : Http2.ExtendedConnect.Response)
+    (limits : Limits) : Except Error Unit :=
+  validateMetadataLimits response.headers limits
+    (fieldListEntrySize ":status" (toString response.status))
+
+private def toWsHeaders (metadata : Http2.Headers) : Except Error Headers := do
   let mut headers : Headers := #[]
   for header in metadata do
     match Header.ofString header.name header.value with
@@ -22,8 +61,8 @@ private def toWsHeaders (metadata : Grpc.Metadata) : Except Error Headers := do
     | .error error => throw error
   pure headers
 
-private def toMetadata (headers : Headers) : Except Error Grpc.Metadata := do
-  let mut metadata := Grpc.Metadata.empty
+private def toMetadata (headers : Headers) : Except Error Http2.Headers := do
+  let mut metadata := Http2.Headers.empty
   for header in headers do
     let checked ← Header.ofBytes header.name header.value
     let some value := Header.asciiString? checked.value
@@ -105,7 +144,7 @@ def buildClientRequest (offer : ClientOffer) : Except Error Request := do
   validateProtocols offer.subprotocols
   validateExtras offer.extraHeaders protectedRequestName
   if let some origin := offer.origin? then Ws.Handshake.validateOriginValue origin
-  let mut headers := Grpc.Metadata.empty.insert "sec-websocket-version" "13"
+  let mut headers := Http2.Headers.empty.insert "sec-websocket-version" "13"
   if let some origin := offer.origin? then headers := headers.insert "origin" origin
   unless offer.subprotocols.isEmpty do
     headers := headers.insert "sec-websocket-protocol"
@@ -121,7 +160,7 @@ def buildClientRequest (offer : ClientOffer) : Except Error Request := do
     path := offer.endpoint.http2RequestTarget
     headers
   }
-  match Grpc.Http2.ExtendedConnect.encodeRequest request with
+  match Http2.ExtendedConnect.encodeRequest request with
   | .ok _ => pure request
   | .error status => throw (statusError status)
 
@@ -141,8 +180,10 @@ private def validateTarget (scheme authority target : String) : Except Error Uni
   unless endpoint.authority == authority && endpoint.http2RequestTarget == target do
     throw (Error.handshake "WebSocket extended CONNECT authority or path is invalid")
 
-def validateServerRequest (request : Request) : Except Error ServerRequest := do
-  match Grpc.Http2.ExtendedConnect.encodeRequest request with
+def validateServerRequest (request : Request) (limits : Limits := {}) :
+    Except Error ServerRequest := do
+  validateRequestLimits request limits
+  match Http2.ExtendedConnect.encodeRequest request with
   | .error status => throw (statusError status)
   | .ok _ => pure ()
   unless request.protocol == "websocket" do
@@ -178,7 +219,7 @@ def buildServerResponse (request : ServerRequest) (accept : ServerAccept) :
     unless request.subprotocols.any fun offered => offered == selected do
       throw (Error.invalidArgument "selected WebSocket subprotocol was not offered")
   Ws.Handshake.validateNegotiatedExtensions request.extensions accept.extensions
-  let mut headers := Grpc.Metadata.empty
+  let mut headers := Http2.Headers.empty
   if let some selected := accept.subprotocol? then
     headers := headers.insert "sec-websocket-protocol" selected.value
   unless accept.extensions.isEmpty do
@@ -186,13 +227,14 @@ def buildServerResponse (request : ServerRequest) (accept : ServerAccept) :
       (← Ws.Handshake.serializeExtensions accept.extensions)
   headers := headers.append (← toMetadata accept.extraHeaders)
   let response : Response := { status := 200, headers }
-  match Grpc.Http2.ExtendedConnect.encodeResponse response with
+  match Http2.ExtendedConnect.encodeResponse response with
   | .ok _ => pure response
   | .error status => throw (statusError status)
 
-def validateServerResponse (offer : ClientOffer) (response : Response) :
+def validateServerResponse (offer : ClientOffer) (response : Response) (limits : Limits := {}) :
     Except Error ClientAccepted := do
-  match Grpc.Http2.ExtendedConnect.encodeResponse response with
+  validateResponseLimits response limits
+  match Http2.ExtendedConnect.encodeResponse response with
   | .error status => throw (statusError status)
   | .ok _ => pure ()
   unless 200 <= response.status && response.status < 300 do

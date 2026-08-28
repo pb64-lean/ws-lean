@@ -16,8 +16,8 @@ partial def awaitFinished (task : Task α) (remainingMs : Nat) : Async Bool := d
     Std.Async.sleep (Std.Time.Millisecond.Offset.ofNat slice)
     awaitFinished task (remainingMs - slice)
 
-def takeHandler (result : Except Server.Error Grpc.Http2.ExtendedConnect.Handler) :
-    IO Grpc.Http2.ExtendedConnect.Handler :=
+def takeHandler (result : Except Server.Error Http2.ExtendedConnect.Handler) :
+    IO Http2.ExtendedConnect.Handler :=
   match result with
   | .ok handler => pure handler
   | .error error => throw (IO.userError error.message)
@@ -122,7 +122,7 @@ def http1VersionTests : IO Unit := do
     ("Sec-WebSocket-Version: 12\r\n" ++
      "Sec-WebSocket-Version: 13\r\n") false
 
-def h2Request (headers : Grpc.Metadata) : Grpc.Http2.ExtendedConnect.Request := {
+def h2Request (headers : Http2.Headers) : Http2.ExtendedConnect.Request := {
   protocol := "websocket"
   scheme := "http"
   authority := "example.test"
@@ -130,7 +130,7 @@ def h2Request (headers : Grpc.Metadata) : Grpc.Http2.ExtendedConnect.Request := 
   headers
 }
 
-def runHttp2VersionCase (label : String) (headers : Grpc.Metadata)
+def runHttp2VersionCase (label : String) (headers : Http2.Headers)
     (advertise : Bool) : IO Unit := do
   let policyCalled ← IO.mkRef false
   let handler ← takeHandler <| Server.extendedConnectHandler
@@ -146,18 +146,18 @@ def runHttp2VersionCase (label : String) (headers : Grpc.Metadata)
 
 def http2VersionTests : IO Unit := do
   runHttp2VersionCase "H2 unsupported decimal"
-    (Grpc.Metadata.singleton "sec-websocket-version" "12") true
-  runHttp2VersionCase "H2 missing" Grpc.Metadata.empty false
+    (Http2.Headers.singleton "sec-websocket-version" "12") true
+  runHttp2VersionCase "H2 missing" Http2.Headers.empty false
   runHttp2VersionCase "H2 empty"
-    (Grpc.Metadata.singleton "sec-websocket-version" "") false
+    (Http2.Headers.singleton "sec-websocket-version" "") false
   runHttp2VersionCase "H2 malformed"
-    (Grpc.Metadata.singleton "sec-websocket-version" "twelve") false
+    (Http2.Headers.singleton "sec-websocket-version" "twelve") false
   runHttp2VersionCase "H2 comma list"
-    (Grpc.Metadata.singleton "sec-websocket-version" "12, 13") false
+    (Http2.Headers.singleton "sec-websocket-version" "12, 13") false
   runHttp2VersionCase "H2 leading zero"
-    (Grpc.Metadata.singleton "sec-websocket-version" "012") false
+    (Http2.Headers.singleton "sec-websocket-version" "012") false
   runHttp2VersionCase "H2 out of grammar"
-    (Grpc.Metadata.singleton "sec-websocket-version" "300") false
+    (Http2.Headers.singleton "sec-websocket-version" "300") false
   runHttp2VersionCase "H2 duplicate" #[
     { name := "sec-websocket-version", value := "12" },
     { name := "sec-websocket-version", value := "13" }
@@ -224,7 +224,7 @@ def openingDeadlineTests : IO Unit := do
     }
   let startedAt ← IO.monoMsNow
   match ← Async.block (handler (h2Request
-      (Grpc.Metadata.singleton "sec-websocket-version" "13"))) with
+      (Http2.Headers.singleton "sec-websocket-version" "13"))) with
   | .accept _ => throw (IO.userError "stalled H2 policy was accepted")
   | .reject rejection =>
       expect (rejection.status == 503) "stalled H2 policy did not return status 503"

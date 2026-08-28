@@ -72,7 +72,7 @@ def initialInboundLifecycleTest : IO Unit := Async.block do
   expect (← aborted.get) "HTTP/1 wrapper did not forward abort"
   expect (← retired.get) "HTTP/1 wrapper did not forward retirement"
 
-def tunnelFrom (waitImpl cancelImpl : Async Unit) : Grpc.Http2.ExtendedConnect.Tunnel := {
+def tunnelFrom (waitImpl cancelImpl : Async Unit) : Http2.ExtendedConnect.Tunnel := {
   sendBytesImpl := fun _ => pure (.ok ())
   recvBytesImpl := pure (.ok none)
   closeSendImpl := pure (.ok ())
@@ -108,6 +108,23 @@ def faultyHttp2LifecycleTest : IO Unit := Async.block do
     "faulty HTTP/2 cancel/wait made ByteStream.retire unbounded"
   try Async.ofAsyncTask retirement catch _ => pure ()
   expect ((← cancelCount.get) == 1) "sticky HTTP/2 abort invoked tunnel cancellation more than once"
+
+def peerResetPropagationTest : IO Unit := Async.block do
+  let reset := Http2.Error.stream 1 .cancel "peer reset the WebSocket tunnel"
+  let tunnel : Http2.ExtendedConnect.Tunnel := {
+    sendBytesImpl := fun _ => pure (.error reset)
+    recvBytesImpl := pure (.error reset)
+    closeSendImpl := pure (.error reset)
+    cancelImpl := pure ()
+    waitImpl := pure (.error reset)
+  }
+  let stream ← Transport.Http2.ofTunnel tunnel
+  match ← stream.recv? with
+  | .error error =>
+      expect (error.kind == .reset && error.code == some Http2.ErrorCode.cancel.toNat)
+        "peer RST_STREAM(CANCEL) was misreported as local cancellation"
+  | .ok _ => throw (IO.userError "peer RST_STREAM(CANCEL) was not propagated")
+  stream.retire
 
 def loopback : IO (TCP.Socket.Client × TCP.Socket.Client) := do
   let listener ← TCP.Socket.Server.mk
@@ -191,6 +208,7 @@ def main : IO Unit := do
   initialInboundLifecycleTest
   cleanHttp2LifecycleTest
   faultyHttp2LifecycleTest
+  peerResetPropagationTest
   plainTransportTest
   plainFinishIdempotencyTest
   repeatedPlainRetirementTest

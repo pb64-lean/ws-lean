@@ -32,6 +32,16 @@ partial def awaitTaskFinished (task : Task α) (remainingMs : Nat) : Async Bool 
     Std.Async.sleep (Std.Time.Millisecond.Offset.ofNat 1)
     awaitTaskFinished task (remainingMs - 1)
 
+partial def awaitWriteCount (capture : IO.Ref (Array ByteArray)) (count remainingMs : Nat) :
+    Async Bool := do
+  if (← capture.get).size >= count then
+    pure true
+  else if remainingMs == 0 then
+    pure false
+  else
+    Std.Async.sleep (Std.Time.Millisecond.Offset.ofNat 1)
+    awaitWriteCount capture count (remainingMs - 1)
+
 structure Link where
   client : Transport.ByteStream
   server : Transport.ByteStream
@@ -394,6 +404,48 @@ def fragmentedCloseRaceTest : IO Unit := Async.block do
   expect (closeCount == 1) "fragment interruption wrote more than one local Close"
   expect (pingCount == 0) "writer emitted a control frame after Close ownership"
 
+def pongAfterLocalCloseTest : IO Unit := Async.block do
+  let inbound ← Std.CloseableChannel.new (some 4)
+  let outbound ← Std.CloseableChannel.new (some 8)
+  let capture ← IO.mkRef #[]
+  let client ← takeStart "post-Close Ping client" (← Connection.start .client
+    (stream inbound outbound capture) { closeTimeoutMs := 500, retireTimeoutMs := 20 })
+  let closing ← Async.toIO (Connection.close client)
+  unless ← awaitWriteCount capture 1 250 do
+    Connection.requestAbort client
+    try discard <| Async.ofAsyncTask closing catch _ => pure ()
+    throw (IO.userError "local Close was not written")
+  let pingPayload := "after-close".toUTF8
+  let pingWire := (Frame.encode .server none {
+    opcode := .ping, payload := pingPayload
+  }).toOption.get!
+  discard <| await (← inbound.send pingWire)
+  unless ← awaitWriteCount capture 2 250 do
+    Connection.requestAbort client
+    try discard <| Async.ofAsyncTask closing catch _ => pure ()
+    throw (IO.userError "Ping after local Close did not produce a Pong")
+  let closeWire := (Frame.encode .server none {
+    opcode := .close, payload := ByteArray.mk #[0x03, 0xe8]
+  }).toOption.get!
+  discard <| await (← inbound.send closeWire)
+  match ← Async.ofAsyncTask closing with
+  | .error error => throw (IO.userError s!"post-Close Ping handshake: {error.message}")
+  | .ok termination =>
+      expect (termination.kind == .clean)
+        "Ping after local Close changed clean termination"
+  let writes ← capture.get
+  let mut decoder := Frame.Decoder.new .server
+  let mut frames : Array Frame.Frame := #[]
+  for wire in writes do
+    let (next, decoded) ← match decoder.feed wire with
+      | .ok result => pure result
+      | .error error => throw (IO.userError s!"decode post-Close control: {error.message}")
+    decoder := next
+    frames := frames.append decoded
+  expect (frames.size == 2 && frames[0]!.opcode == .close &&
+      frames[1]!.opcode == .pong && frames[1]!.payload == pingPayload)
+    "post-Close Ping was not answered exactly once after the local Close"
+
 def forcedAdmissionCancellationTest : IO Unit := Async.block do
   let inbound ← Std.CloseableChannel.new (some 1)
   let capture ← IO.mkRef #[]
@@ -468,5 +520,6 @@ def main : IO Unit := do
   incomingBackpressureTest
   cancelledReceiveDoesNotConsumeTest
   fragmentedCloseRaceTest
+  pongAfterLocalCloseTest
   forcedAdmissionCancellationTest
   IO.println "connection lifecycle tests passed"

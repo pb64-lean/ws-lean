@@ -38,6 +38,18 @@ def main : IO Unit := do
   expect (serverRequest.origin? == some "https://example.test" &&
     serverRequest.subprotocols == #[chat] && serverRequest.extensions == #[compression])
     "extended CONNECT request metadata differs"
+  expectError "HTTP/2 request field-count limit" <|
+    Ws.Http2.Handshake.validateServerRequest request
+      { ({} : Limits) with maxHeaderCount := 3 }
+  expectError "HTTP/2 request field-value limit" <|
+    Ws.Http2.Handshake.validateServerRequest request
+      { ({} : Limits) with maxHeaderValueBytes := 1 }
+  expectError "HTTP/2 request pseudo-field limit" <|
+    Ws.Http2.Handshake.validateServerRequest request
+      { ({} : Limits) with maxStartLineBytes := 8 }
+  expectError "HTTP/2 request aggregate limit" <|
+    Ws.Http2.Handshake.validateServerRequest request
+      { ({} : Limits) with maxHandshakeBytes := 64 }
 
   let response ← take "build response" <| Ws.Http2.Handshake.buildServerResponse serverRequest {
     subprotocol? := some chat
@@ -47,6 +59,12 @@ def main : IO Unit := do
   let accepted ← take "validate response" (Ws.Http2.Handshake.validateServerResponse offer response)
   expect (accepted.subprotocol? == some chat && accepted.extensions == #[compression])
     "extended CONNECT negotiation differs"
+  expectError "HTTP/2 response field-count limit" <|
+    Ws.Http2.Handshake.validateServerResponse offer response
+      { ({} : Limits) with maxHeaderCount := 1 }
+  expectError "HTTP/2 response aggregate limit" <|
+    Ws.Http2.Handshake.validateServerResponse offer response
+      { ({} : Limits) with maxHandshakeBytes := 64 }
 
   expectError "wrong extended protocol"
     (Ws.Http2.Handshake.validateServerRequest { request with protocol := "not-websocket" })
