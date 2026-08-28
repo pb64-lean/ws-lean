@@ -490,9 +490,8 @@ private def rejectionMetadata (rejection : Rejection) : Except Error Http2.Heade
     let checked ← match Header.ofBytes header.name header.value with
       | .ok checked => pure checked
       | .error error => throw (ofWsError error)
-    let some value := Header.asciiString? checked.value
-      | throw (failure .invalidArgument "HTTP/2 rejection fields must contain ASCII")
-    metadata := metadata.insert checked.name value
+    let (value, valueOctets?) := Http2.Header.decodeWireString checked.value
+    metadata := metadata.push { name := checked.name, value, valueOctets? }
   pure metadata
 
 private def h2Rejection (rejection : Rejection) : Http2.ExtendedConnect.Decision :=

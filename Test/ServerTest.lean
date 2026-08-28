@@ -163,6 +163,22 @@ def http2VersionTests : IO Unit := do
     { name := "sec-websocket-version", value := "13" }
   ] false
 
+def http2RejectionOctetsTest : IO Unit := do
+  let rawValue := ByteArray.mk #[0x80, 0xff]
+  let extraHeaders ← match Ws.Headers.empty.insertBytes "x-reason" rawValue with
+    | .ok headers => pure headers
+    | .error error => throw (IO.userError error.message)
+  let handler ← takeHandler <| Server.extendedConnectHandler
+    (fun _ => pure (.reject { status := 429, extraHeaders })) (fun _ => pure ())
+  match ← Async.block (handler (h2Request
+      (Http2.Headers.singleton "sec-websocket-version" "13"))) with
+  | .accept _ => throw (IO.userError "HTTP/2 obs-text rejection was accepted")
+  | .reject rejection =>
+      expect (rejection.status == 429)
+        "HTTP/2 obs-text rejection changed the policy-selected status"
+      expect (rejection.headers.getAllOctets "x-reason" == #[rawValue])
+        "HTTP/2 rejection changed invalid UTF-8 field octets"
+
 def openingDeadlineTests : IO Unit := do
   let slowloris ← stalledStream
   let startedAt ← IO.monoMsNow
@@ -256,6 +272,7 @@ def invalidPolicyRejectionTest : IO Unit := do
 def main : IO Unit := do
   http1VersionTests
   http2VersionTests
+  http2RejectionOctetsTest
   openingDeadlineTests
   invalidPolicyRejectionTest
   IO.println "server opening tests passed"
