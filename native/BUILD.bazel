@@ -2,7 +2,7 @@ package(default_visibility = ["//visibility:public"])
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_lean//lean:defs.bzl", "lean_runtime_headers")
-load("@rules_lean_grpc//native:defs.bzl", "lean_generated_c_file")
+load("@rules_lean//lean:defs.bzl", "lean_generated_c_file")
 
 lean_runtime_headers(
     name = "lean_runtime_headers",
